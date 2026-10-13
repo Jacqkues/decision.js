@@ -1,7 +1,7 @@
 // The System One API over either engine: named questions over a state in, typed answers out.
 import { D13BEngine } from "./d1-3b-engine.js";
 import { D13BPrompt } from "./d1-3b-prompt.js";
-import { softmax, type GpuOptions } from "./gpu.js";
+import { requestDevice, softmax, type GpuOptions } from "./gpu.js";
 import { D1OmniEngine, type OmniSeq } from "./omni-engine.js";
 import { LayaEngine } from "./laya-engine.js";
 import { D3Engine } from "./d3-engine.js";
@@ -50,9 +50,17 @@ export class D1 {
     const manifest = await (await get(`${base}manifest.json`)).json();
     const kind: ModelKind = manifest.config?.model === "laya" ? "laya" : manifest.config?.model === "d3" ? "d3"
       : manifest.config?.model === "d1-3b" || !("head_layers" in (manifest.config ?? {})) ? "d1-3b" : "d1-omni";
-    const [engine, tokenizer] = await Promise.all([
-      kind === "d1-omni" ? D1OmniEngine.load(base, opts) : kind === "laya" ? LayaEngine.load(base, opts) : kind === "d3" ? D3Engine.load(base, opts) : D13BEngine.load(base, opts),
-      TextTokenizer.load(base, get),
+    const device = opts.device ?? (await requestDevice());
+    opts = { ...opts, device };
+    // A GPU that runs out of memory may be lost, after which nothing it was asked to do ever finishes: fail instead.
+    const lost = device.lost.then((info) => Promise.reject(new Error(`decision.js: the GPU stopped while loading the model (${info.message || info.reason}); it probably lacks the memory for it`)));
+    lost.catch(() => undefined);
+    const [engine, tokenizer] = await Promise.race([
+      Promise.all([
+        kind === "d1-omni" ? D1OmniEngine.load(base, opts) : kind === "laya" ? LayaEngine.load(base, opts) : kind === "d3" ? D3Engine.load(base, opts) : D13BEngine.load(base, opts),
+        TextTokenizer.load(base, get),
+      ]),
+      lost,
     ]);
     return new D1(kind, engine, tokenizer, opts.tokensPerPass ?? (kind === "d1-3b" ? 4096 : 8192), opts.shareState);
   }

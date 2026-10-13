@@ -15,7 +15,8 @@ export interface GpuOptions {
   matrixUnits?: boolean;
   /** Convert the quantized linear weights once to f16 (8×8 blocks on matrix units, k-major groups of 4
    *  columns otherwise), which the matmul reads with no dequantization (faster; twice the GPU memory of q8).
-   *  Default: when that stays under 1.5 GB. */
+   *  Default: when that stays under 1.5 GB, and not on a phone or tablet, whose GPU shares a few GB with
+   *  everything else. */
   directWeights?: boolean;
   /** Called as weights arrive, in bytes. */
   onProgress?: (loaded: number, total: number) => void;
@@ -27,6 +28,9 @@ export interface GpuOptions {
 
 /** Profiling: set globalThis.__d1Profile to a Map before loading, and each forward pass adds the GPU time of
  *  every kernel to it (ns, keyed by WGSL source). Each dispatch then gets its own timed pass (slower). */
+/** A phone or tablet (Chromium says so directly; elsewhere the user agent does). */
+const mobile = () => (navigator as { userAgentData?: { mobile?: boolean } }).userAgentData?.mobile || /Android|iPhone|iPad|Mobile/.test(navigator.userAgent);
+
 const profiling = () => (globalThis as { __d1Profile?: Map<string, number> }).__d1Profile;
 
 export const align4 = (n: number) => Math.ceil(n / 4) * 4;
@@ -69,6 +73,9 @@ export async function loadWeights<M extends BaseManifest>(base: string, opts: Gp
     return buf;
   };
   const names = Object.keys(m.tensors);
+  const limit = Math.min(device.limits.maxBufferSize, device.limits.maxStorageBufferBindingSize);
+  const largest = Math.max(...names.map((n) => m.tensors[n]!.bytes));
+  if (largest > limit) throw new Error(`decision.js: this GPU's buffers are limited to ${(limit / 1e6).toFixed(0)} MB, this model needs ${(largest / 1e6).toFixed(0)} MB`);
   for (let i = 0; i < names.length; i += 6) {
     await Promise.all(names.slice(i, i + 6).map(async (name) => {
       const t = m.tensors[name]!;
@@ -107,7 +114,7 @@ export class GpuEngine {
       return wt.bits && !keep.includes(n) && wt.shape.length === 2 && N % (mu ? 64 : 128) === 0 && K % 32 === 0;
     });
     const bytes = names.reduce((a, n) => a + this.w[n]!.shape[0]! * this.w[n]!.shape[1]! * 2, 0);
-    if (!(opts.directWeights ?? bytes < 1.5e9)) return;
+    if (!(opts.directWeights ?? (bytes < 1.5e9 && !mobile()))) return;
     for (const n of names) {
       const wt = this.w[n]!, [N, K] = wt.shape as [number, number];
       const out = this.device.createBuffer({ size: N * K * 2, usage: GPUBufferUsage.STORAGE });
