@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>d3-lite demo</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --card: #fff; --line: #e7e5e4; --accent: #4f46e5; --bar: #c7d2fe; --ok: #15803d; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --card: #1c1917; --line: #292524; --accent: #818cf8; --bar: #3730a3; --ok: #4ade80; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .presets button { margin: 0; background: var(--card); color: var(--fg); border: 1px solid var(--line); font-weight: 500; }
+  .presets button.on { border-color: var(--accent); color: var(--accent); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 13px; color: var(--muted); }
+  textarea { width: 100%; min-height: 240px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); font: 13px/1.45 ui-monospace, monospace; resize: vertical; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
+  button { padding: 9px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; font: inherit; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  #status { color: var(--muted); font-size: 13px; }
+  progress { width: 100%; height: 6px; margin-top: 8px; accent-color: var(--accent); }
+  #answers { margin-top: 24px; display: grid; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card h3 { margin: 0 0 8px; font-size: 14px; }
+  .card h3 b { color: var(--accent); }
+  .row { display: grid; grid-template-columns: minmax(90px, 200px) 1fr 56px; gap: 8px; align-items: center; font-size: 13px; margin: 3px 0; }
+  .row span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; background: var(--bar); }
+  .best .fill { background: var(--accent); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  #speed { margin-top: 16px; font-size: 13px; color: var(--muted); }
+  #speed b { color: var(--fg); font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <h1>d3-lite in your browser</h1>
+  <p class="sub">vLLM Semantic Router's Decision 3.0 (Qwen3.5-0.8B) on WebGPU, with decision.js. One forward pass per question, no token generated, nothing leaves this page.</p>
+  <div class="presets" id="presets"></div>
+  <div class="grid">
+    <div><label for="state">State (text or JSON)</label><textarea id="state" spellcheck="false"></textarea></div>
+    <div><label for="questions">Questions (Decision Index schema)</label><textarea id="questions" spellcheck="false"></textarea></div>
+  </div>
+  <div class="bar">
+    <button id="run" disabled>Decide</button>
+    <button id="bench" class="ghost" disabled>Throughput: 100 × these questions</button>
+    <label class="toggle"><input type="checkbox" id="share" /> read the state once for all questions (faster, approximate)</label>
+  </div>
+  <div class="bar"><span id="status">loading d3-lite…</span></div>
+  <progress id="progress" max="1" value="0"></progress>
+  <div id="answers"></div>
+  <div id="speed"></div>
+</main>
+<script type="module" src="./d3.ts"></script>
+</body>
+</html>

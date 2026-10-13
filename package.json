@@ -1,0 +1,56 @@
+{
+  "name": "decision.js",
+  "version": "0.1.0",
+  "description": "Small decision models (LiquidAI d1-omni-600M and d1-3B, Laya) in the browser on WebGPU: typed decisions over any text or JSON, no server.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "browser",
+    "classification",
+    "d1",
+    "decision",
+    "laya",
+    "lfm",
+    "liquid",
+    "llm",
+    "modernbert",
+    "system-one",
+    "webgpu"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run",
+    "test:browser": "tsx scripts/run-browser.ts parity",
+    "dev": "vite",
+    "bundle": "vite build -c vite.bundle.config.ts"
+  },
+  "dependencies": {
+    "@huggingface/tokenizers": "^0.2.0"
+  },
+  "devDependencies": {
+    "@litertjs/core": "^2.5.3",
+    "@types/node": "^26.6.4",
+    "@webgpu/types": "^0.1.74",
+    "playwright": "^1.64.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  }
+}

@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8" /><pre id="out"></pre>
+<script type="module">
+import { loadAndCompile, loadLiteRt, Tensor } from "@litertjs/core";
+const out = document.getElementById("out"); const R = (window.__r = {});
+await loadLiteRt("/node_modules/@litertjs/core/wasm/");
+for (const q of ["fp32", "fp16", "int8-weight-channel", "int8-weight-block32", "int8-dynamic-channel", "int4-weight-block32", "int4-dynamic-block32"]) { const n = 1024;
+  try {
+    const m = await loadAndCompile(`/compare/litert/repro/linear-${q}.tflite`, { accelerator: "webgpu" });
+    const r = await m.run([new Tensor(new Float32Array(64 * 1024).fill(0.01), [64, 1024])]);
+    const z = await r[0].data();
+    out.textContent += `Linear(1024→${n}) ${q}: OK on WebGPU (fully accelerated: ${m.isFullyAccelerated}), y[0] = ${z[0].toFixed(4)}\n`;
+  } catch (e) { out.textContent += `Linear(1024→${n}) ${q}: FAILS — ${String(e).slice(0, 120)}\n`; }
+}
+R.done = true;
+</script>

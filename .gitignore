@@ -1,0 +1,11 @@
+node_modules
+dist
+.cache
+models
+*.tflite
+compare/litert/embed.f16
+compare/litert/sequences.json
+compare/litert/reference.json
+bench/decision-index/*.json
+bundle/
+__pycache__/
