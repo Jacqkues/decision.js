@@ -47,6 +47,6 @@ the way, each of these broke the WebGPU path:
 ```sh
 python compare/litert/export.py --quant fp16 --segments 4   # torch, transformers, litert-torch
 npx tsx compare/litert/encode.ts                             # sequences.json (run first)
-npx tsx scripts/run-browser.ts ../../compare/litert/bench "tflite=d1-omni-b24-l136-fp16.tflite&parts=4&prec=fp16"
-SAFE=1 npx tsx scripts/run-browser.ts ../../compare/litert/bench "tflite=d1-omni-b24-l136-fp16.tflite&parts=4&prec=fp16&mu=0"
+npm run bench -- litert "tflite=d1-omni-b24-l136-fp16.tflite&parts=4&prec=fp16"
+SAFE=1 npm run bench -- litert "tflite=d1-omni-b24-l136-fp16.tflite&parts=4&prec=fp16&mu=0"
 ```

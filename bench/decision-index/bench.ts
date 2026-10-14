@@ -11,8 +11,11 @@ const q = new URLSearchParams(location.search);
 const argmax = (p: number[]) => p.indexOf(Math.max(...p));
 
 try {
-  const sample = (await (await fetch("/bench/decision-index/sample.json")).json()) as Row[];
-  const ref = (await (await fetch(`/bench/decision-index/reference-${q.get("ref") ?? "omni"}.json`)).json()) as { repo: string; probabilities: number[][][] };
+  const all0 = (await (await fetch("/bench/decision-index/sample.json")).json()) as Row[];
+  const ref = (await (await fetch(`/bench/decision-index/reference-${q.get("ref") ?? "omni"}.json`)).json()) as { repo: string; probabilities: (number[][] | null)[] };
+  // the requests the official runtime answered (EmbeddingGemma 2's fails on an empty string state)
+  const sample = all0.filter((_, i) => ref.probabilities[i]);
+  ref.probabilities = ref.probabilities.filter(Boolean);
   const d1 = await D1.load(`/models/${q.get("model") ?? "d1-omni-600M-q8"}/`, { shareState: q.get("share") === "1", matrixUnits: q.get("mu") !== "0" });
   log(`${d1.kind} (${q.get("model") ?? "d1-omni-600M-q8"}) vs ${ref.repo} (official runtime, original weights) · ${sample.length} Decision Index requests · matrix units ${d1.engine.matrixUnits}`);
   const requests = sample.map((r) => [r.state, Object.values(r.questions)] as [unknown, Question[]]);

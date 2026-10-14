@@ -1,17 +1,20 @@
-// The System One API over either engine: named questions over a state in, typed answers out.
+// The System One API over every engine: named questions over a state in, typed answers out.
 import { D13BEngine } from "./d1-3b-engine.js";
 import { D13BPrompt } from "./d1-3b-prompt.js";
 import { requestDevice, softmax, type GpuOptions } from "./gpu.js";
 import { D1OmniEngine, type OmniSeq } from "./omni-engine.js";
 import { LayaEngine } from "./laya-engine.js";
 import { D3Engine } from "./d3-engine.js";
+import { Eg2Engine } from "./eg2-engine.js";
+import { Eg2Head } from "./eg2-head.js";
+import { renderQuestion, renderState, tokenize } from "./eg2-prompt.js";
 import { encode as encodeD3 } from "./d3-prompt.js";
 import { encode as encodeLaya } from "./laya-prompt.js";
 import { criterion, encode, temperatureKey } from "./omni-prompt.js";
 import { answer, checkQuestion, type Question, type Response } from "./questions.js";
 import { TextTokenizer } from "./tokenizer.js";
 
-export type ModelKind = "d1-omni" | "d1-3b" | "laya" | "d3";
+export type ModelKind = "d1-omni" | "d1-3b" | "laya" | "d3" | "eg2";
 
 export interface LoadOptions extends GpuOptions {
   /** Tokens per forward pass (default 8192 for d1-omni, 4096 for d1-3B): bounds GPU memory. */
@@ -19,6 +22,9 @@ export interface LoadOptions extends GpuOptions {
    *  approximation: the state no longer sees the question; off by default). */
   shareState?: boolean;
   tokensPerPass?: number;
+  /** EmbeddingGemma 2 typed decisions: the workflow named in every state's text (the model's `workflow`,
+   *  e.g. "agent_trace_observability"; default ""). */
+  workflow?: string;
 }
 
 /** A request: a state (a string or any JSON value) and its questions. */
@@ -32,23 +38,29 @@ export interface BatchOptions {
 export class D1 {
   private queue: Promise<unknown> = Promise.resolve();
   private prompt3B?: D13BPrompt;
+  private eg2Head?: Eg2Head;
+  /** EmbeddingGemma 2: normalized embeddings of the texts seen so far (states, questions, options), so that a
+   *  schema asked again is not embedded again. */
+  private embeddings = new Map<string, Float32Array>();
 
   private constructor(
     readonly kind: ModelKind,
-    readonly engine: D1OmniEngine | D13BEngine | LayaEngine | D3Engine,
+    readonly engine: D1OmniEngine | D13BEngine | LayaEngine | D3Engine | Eg2Engine,
     readonly tokenizer: TextTokenizer,
     private tokensPerPass: number,
     /** d3-lite: see LoadOptions.shareState; can be switched between calls. */
     public shareState = false,
+    /** EmbeddingGemma 2: see LoadOptions.workflow; can be changed between calls. */
+    public workflow = "",
   ) {}
 
-  /** A model exported by scripts/export-omni.py or scripts/export-3b.py, at `base` (a URL ending in "/"
-   *  holding manifest.json, weights.bin, tokenizer.json and tokenizer_config.json). */
+  /** A model exported by one of the scripts/export-*.py, at `base` (a URL ending in "/" holding manifest.json,
+   *  weights.bin, tokenizer.json and tokenizer_config.json). */
   static async load(base: string, opts: LoadOptions = {}): Promise<D1> {
     if (!base.endsWith("/")) base += "/";
     const get = opts.fetch ?? globalThis.fetch.bind(globalThis);
     const manifest = await (await get(`${base}manifest.json`)).json();
-    const kind: ModelKind = manifest.config?.model === "laya" ? "laya" : manifest.config?.model === "d3" ? "d3"
+    const kind: ModelKind = manifest.config?.model === "laya" ? "laya" : manifest.config?.model === "d3" ? "d3" : manifest.config?.model === "eg2" ? "eg2"
       : manifest.config?.model === "d1-3b" || !("head_layers" in (manifest.config ?? {})) ? "d1-3b" : "d1-omni";
     const device = opts.device ?? (await requestDevice());
     opts = { ...opts, device };
@@ -57,12 +69,13 @@ export class D1 {
     lost.catch(() => undefined);
     const [engine, tokenizer] = await Promise.race([
       Promise.all([
-        kind === "d1-omni" ? D1OmniEngine.load(base, opts) : kind === "laya" ? LayaEngine.load(base, opts) : kind === "d3" ? D3Engine.load(base, opts) : D13BEngine.load(base, opts),
+        kind === "d1-omni" ? D1OmniEngine.load(base, opts) : kind === "laya" ? LayaEngine.load(base, opts) : kind === "d3" ? D3Engine.load(base, opts)
+          : kind === "eg2" ? Eg2Engine.load(base, opts) : D13BEngine.load(base, opts),
         TextTokenizer.load(base, get),
       ]),
       lost,
     ]);
-    return new D1(kind, engine, tokenizer, opts.tokensPerPass ?? (kind === "d1-3b" ? 4096 : 8192), opts.shareState);
+    return new D1(kind, engine, tokenizer, opts.tokensPerPass ?? (kind === "d1-3b" ? 4096 : 8192), opts.shareState, opts.workflow);
   }
 
   /** Named questions over one state, in one call. */
@@ -99,7 +112,8 @@ export class D1 {
   /** One call at a time on the GPU (the engines reuse their activation buffers). */
   private run(requests: Request<Question[]>[], opts: BatchOptions) {
     requests.forEach(([, qs]) => qs.forEach(checkQuestion));
-    const job = this.queue.then(() => (this.kind === "d1-3b" ? this.run3B(requests, opts) : this.kind === "d3" ? this.runD3(requests, opts) : this.runEncoder(requests, opts)));
+    const job = this.queue.then(() => (this.kind === "d1-3b" ? this.run3B(requests, opts) : this.kind === "d3" ? this.runD3(requests, opts)
+      : this.kind === "eg2" ? this.runEg2(requests, opts) : this.runEncoder(requests, opts)));
     this.queue = job.catch(() => undefined);
     return job;
   }
@@ -152,6 +166,46 @@ export class D1 {
       i = j;
     }
     return out;
+  }
+
+  /** EmbeddingGemma 2: every distinct text (state, question, option) embedded once, then the head on the host. */
+  private async runEg2(requests: Request<Question[]>[], opts: BatchOptions) {
+    const engine = this.engine as Eg2Engine, c = engine.m.config;
+    const head = (this.eg2Head ??= new Eg2Head(c, engine.host));
+    const asked = requests.map(([s, qs]) => ({ state: renderState(s, this.workflow), questions: qs.map((q) => renderQuestion(q)) }));
+    // the texts not embedded yet, in passes of at most tokensPerPass tokens
+    const todo = new Map<string, number[]>(), tokens = asked.map(() => 0); // tokens: the ones each request adds
+    asked.forEach((a, r) => {
+      for (const t of [a.state, ...a.questions.flatMap((q) => [q.question, ...q.options])]) {
+        if (this.embeddings.has(t) || todo.has(t)) continue;
+        todo.set(t, tokenize(this.tokenizer, t, c.prompt, c.max_len));
+        tokens[r]! += todo.get(t)!.length;
+      }
+    });
+    const texts = [...todo.keys()];
+    for (let i = 0; i < texts.length;) {
+      let j = i, used = 0;
+      do used += todo.get(texts[j]!)!.length, j++; while (j < texts.length && used + todo.get(texts[j]!)!.length <= this.tokensPerPass);
+      const { embeddings } = await engine.embed(texts.slice(i, j).map((t) => todo.get(t)!));
+      embeddings.forEach((e, k) => this.remember(texts[i + k]!, e));
+      opts.onProgress?.(j, texts.length);
+      i = j;
+    }
+    const emb = (t: string): [string, Float32Array] => [t, this.embeddings.get(t)!];
+    return requests.map(([, qs], r) => ({
+      probs: qs.map((q, k) => {
+        const { question, options } = asked[r]!.questions[k]!;
+        const z = head.logits(q.type, emb(asked[r]!.state), emb(question), options.map(emb));
+        const p = softmax(z.map((v) => v / (c.temperatures[q.type] ?? 1)));
+        return q.type === "noul" ? p.reverse() : p; // the model reads a noul as [no, yes]
+      }),
+      tokens: tokens[r]!, // the texts already embedded (the schema, after its first use) cost nothing
+    }));
+  }
+
+  private remember(text: string, e: Float32Array) {
+    if (this.embeddings.size >= 8192) this.embeddings.delete(this.embeddings.keys().next().value!); // the oldest text first
+    this.embeddings.set(text, e);
   }
 
   private async run3B(requests: Request<Question[]>[], opts: BatchOptions) {

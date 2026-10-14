@@ -64,3 +64,26 @@ describe("d3-lite prompt", () => {
     });
   }
 });
+
+describe("EmbeddingGemma 2 typed-decision texts", () => {
+  const ex = JSON.parse(readFileSync("test/fixtures/eg2-prompts.json", "utf8"));
+  let tok: TextTokenizer;
+  beforeAll(async () => void (tok = await tokenizer(ex.repo)), 300_000);
+  for (const c of ex.states) {
+    it(`state ${c.state} · workflow ${JSON.stringify(c.workflow)}`, async () => {
+      const { renderState, tokenize } = await import("../src/eg2-prompt");
+      if (c.error) return void expect(renderState(states[c.state], c.workflow)).toMatch(/^workflow: /); // the model fails; decision.js reads plain text
+      const text = renderState(states[c.state], c.workflow);
+      expect(text).toEqual(c.text);
+      expect(tokenize(tok, text, ex.prompt)).toEqual(c.ids);
+    });
+  }
+  for (const c of ex.questions) {
+    it(`question ${c.question}`, async () => {
+      const { renderQuestion, tokenize } = await import("../src/eg2-prompt");
+      const { question, options } = renderQuestion(questions[c.question]!, "q");
+      expect([question, ...options]).toEqual(c.texts);
+      expect([question, ...options].map((t) => tokenize(tok, t, ex.prompt))).toEqual(c.ids);
+    });
+  }
+});

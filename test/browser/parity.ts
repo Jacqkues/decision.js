@@ -2,6 +2,8 @@
 // Every request of test/fixtures/prompts.json (each state with every question); reference.json holds the
 // official probabilities with the original weights and with the exported (quantized) ones.
 import { D1, type Question } from "../../src";
+import { Eg2Engine } from "../../src/eg2-engine";
+import { tokenize } from "../../src/eg2-prompt";
 import fx from "../fixtures/prompts.json";
 
 const out = document.getElementById("out")!;
@@ -24,7 +26,13 @@ try {
   let t = performance.now();
   const d1 = await D1.load(base, { matrixUnits: q.get("mu") !== "0", directWeights: q.get("direct") === "0" ? false : undefined });
   log(`${d1.kind} loaded in ${((performance.now() - t) / 1000).toFixed(1)} s · matrix units ${d1.engine.matrixUnits} · subgroups ${d1.engine.subgroups}`);
-  const ref = (await (await fetch(`${base}reference.json`)).json()) as { original: (number[] | null)[][]; quantized: (number[] | null)[][] };
+  const ref = (await (await fetch(`${base}reference.json`)).json()) as { original: (number[] | null)[][]; quantized: (number[] | null)[][]; texts?: string[]; embeddings?: number[][] };
+  if (d1.engine instanceof Eg2Engine && ref.texts) { // the text embeddings themselves
+    const e = d1.engine, c = e.m.config;
+    const { embeddings } = await e.embed(ref.texts.map((t) => tokenize(d1.tokenizer, t, c.prompt, c.max_len)));
+    const cos = embeddings.map((v, i) => v.reduce((a, x, k) => a + x * ref.embeddings![i]![k]!, 0));
+    log(`embeddings vs PyTorch (same weights): cosine ${cos.map((v) => v.toFixed(5)).join(" ")}`);
+  }
   // the questions the reference runtime answered (null: it refused them, and d1.js refuses them too)
   const kept = (fx.states as unknown[]).map((_, i) => (fx.questions as Question[]).map((_, j) => j).filter((j) => ref.quantized[i]![j] != null)).map((js, i) => ({ i, js })).filter((r) => r.js.length);
   const requests = kept.map(({ i, js }) => [(fx.states as unknown[])[i], js.map((j) => (fx.questions as Question[])[j]!)] as [unknown, Question[]]);

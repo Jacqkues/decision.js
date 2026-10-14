@@ -607,6 +607,66 @@ ${swiglu ? `  // SwiGLU epilogue: lane l holds 8×8 block l (block row l / 8, co
 }`;
 }
 
+/** matmulDirect for few rows: `ks` subgroups split K, each over its own K/ks slice of a TM×TN tile (one
+ *  subgroup's worth), then add their f32 partial sums in shared memory. With few rows, a workgroup's walk along K
+ *  is the whole latency (the GPU is mostly idle); split ks ways, it is ks times shorter. K must be a multiple
+ *  of 8·ks. */
+export function matmulSplitK({ tm, tn, ks }: { tm: number; tn: number; ks: number }) {
+  const rm = tm / 8, rn = tn / 8, per = (tm * tn) / 32;
+  const decl: string[] = [], mma: string[] = [], store: string[] = [];
+  for (let i = 0; i < rm; i++) for (let j = 0; j < rn; j++) decl.push(`  var c_${i}_${j} = subgroup_matrix_result<f16, 8, 8>();`);
+  for (let i = 0; i < rm; i++) mma.push(`    let a_${i} = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>, row_major>(&a, (row0 + ${i * 8}u) * p.K + k, p.K);`);
+  for (let j = 0; j < rn; j++) {
+    mma.push(`    let b_${j} = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>, row_major>(&w, (((col0 / 8u) + ${j}u) * kb + k / 8u) * 64u, 8u);`);
+    for (let i = 0; i < rm; i++) mma.push(`    c_${i}_${j} = subgroupMatrixMultiplyAccumulate(a_${i}, b_${j}, c_${i}_${j});`);
+  }
+  for (let i = 0; i < rm; i++) for (let j = 0; j < rn; j++) store.push(`      subgroupMatrixStore<row_major>(&scratch[sub], ${(i * rn + j) * 64}u, c_${i}_${j}, 8u); c_${i}_${j} = subgroup_matrix_result<f16, 8, 8>();`);
+  return /* wgsl */ `enable f16;
+enable subgroups;
+enable chromium_experimental_subgroup_matrix;
+diagnostic(off, chromium.subgroup_matrix_uniformity);
+diagnostic(off, subgroup_uniformity);
+struct P { M: u32, N: u32, K: u32, pad: u32 }
+@group(0) @binding(0) var<uniform> p: P;
+@group(0) @binding(1) var<storage, read> a: array<f16>;
+@group(0) @binding(2) var<storage, read> w: array<f16>;
+@group(0) @binding(3) var<storage, read_write> y: array<f16>;
+const FLUSH: u32 = 128u;
+var<workgroup> scratch: array<array<f16, ${tm * tn}>, ${ks}>;
+var<workgroup> red: array<array<f32, ${tm * tn}>, ${ks}>;
+// split-K tile ${tm}x${tn}/${ks}
+@compute @workgroup_size(${ks * 32}, 1, 1)
+fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(subgroup_invocation_id) lane: u32) {
+  let sub = li / 32u;
+  let row0 = wg.y * ${tm}u;
+  let col0 = wg.x * ${tn}u;
+  let kb = p.K / 8u;
+  let span = p.K / ${ks}u; let kbeg = sub * span;
+  var acc: array<f32, ${per}>;
+${decl.join("\n")}
+  for (var i = 0u; i < span; i += 8u) { // the same steps in every subgroup: the barriers stay uniform
+    let k = kbeg + i;
+${mma.join("\n")}
+    if ((i + 8u) % FLUSH == 0u || i + 8u >= span) {
+${store.join("\n")}
+      workgroupBarrier();
+      for (var j = 0u; j < ${per}u; j++) { acc[j] += f32(scratch[sub][lane * ${per}u + j]); }
+      workgroupBarrier();
+    }
+  }
+  for (var j = 0u; j < ${per}u; j++) { red[sub][lane * ${per}u + j] = acc[j]; }
+  workgroupBarrier();
+  for (var e = li; e < ${tm * tn}u; e += ${ks * 32}u) {
+    var s = 0.0;
+    for (var q = 0u; q < ${ks}u; q++) { s += red[q][e]; }
+    let blk = e / 64u; let idx = e % 64u;
+    let gm = row0 + (blk / ${rn}u) * 8u + idx / 8u;
+    let gn = col0 + (blk % ${rn}u) * 8u + idx % 8u;
+    if (gm < p.M && gn < p.N) { y[gm * p.N + gn] = f16(s); }
+  }
+}`;
+}
+
 /** The direct tiling: one subgroup per workgroup computing 32×64 outputs (32 accumulators): with no shared
  *  tiles, bigger workgroups only add barriers. Fastest of the shapes measured on Apple GPUs (within 3%). */
 export const DIRECT_TILE = { tm: 32, tn: 64, sm: 32, sn: 64 };

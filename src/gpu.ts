@@ -1,7 +1,7 @@
 // What the engines share: a WebGPU device with f16 (and matrix units when the browser exposes them),
 // weights streamed from one weights.bin by Range requests (manifest.json says where each tensor lives),
 // cached pipelines, and a recorder that encodes a whole forward pass into one command buffer.
-import { DIRECT_TILE, MATMUL_DIRECT, MATMUL_SWIGLU, matmulDirect, MATMUL_PORTABLE_F16, MATMUL_PORTABLE_Q4, MATMUL_PORTABLE_Q8, MATMUL_Q4_SG32, MATMUL_Q8_SG32, matmulPortable, matmulPortableF16, PORTABLE_F16_TILE, SILU_MUL, tileWeights, tileWeightsPortable } from "./kernels.js";
+import { DIRECT_TILE, MATMUL_DIRECT, MATMUL_SWIGLU, matmulDirect, matmulSplitK, MATMUL_PORTABLE_F16, MATMUL_PORTABLE_Q4, MATMUL_PORTABLE_Q8, MATMUL_Q4_SG32, MATMUL_Q8_SG32, matmulPortable, matmulPortableF16, PORTABLE_F16_TILE, SILU_MUL, tileWeights, tileWeightsPortable } from "./kernels.js";
 
 export interface TensorInfo { dtype: "q4" | "q8" | "f16" | "f32"; shape: number[]; offset: number; bytes: number; scales?: number; scales_bytes?: number }
 export interface BaseManifest { tensors: Record<string, TensorInfo>; bytes: number }
@@ -94,10 +94,14 @@ export class GpuEngine {
   /** Whether subgroup operations are available (the tiled attention needs them). */
   readonly subgroups: boolean;
   stats = { forwards: 0, tokens: 0, gpuMs: 0 };
+  /** Whether the 4-way split-K matmul fits in the device's workgroup memory (24 KB). */
+  private readonly splitK4: boolean;
+  private readonly splitKernels = new Map<string, string>();
 
   constructor(readonly device: GPUDevice, readonly w: Record<string, Weight>, opts: GpuOptions = {}) {
     this.matrixUnits = device.features.has("chromium-experimental-subgroup-matrix") && opts.matrixUnits !== false;
     this.subgroups = device.features.has("subgroups");
+    this.splitK4 = device.limits.maxComputeWorkgroupStorageSize >= 24576;
   }
 
   /** Frees every weight. */
@@ -198,6 +202,14 @@ export class GpuEngine {
     const matmul = (X: GPUBuffer, wt: Weight, Y: GPUBuffer, M: number) => {
       const [N, K] = wt.shape as [number, number];
       if (wt.tiled) {
+        // few rows: split K between subgroups (4 ways up to 128 rows, 2 up to 512; Apple M5 Pro)
+        const sk = (globalThis as { __d1SplitK?: { tm: number; tn: number; ks: number; below: number } }).__d1SplitK // tuning
+          ?? (M <= 128 && this.splitK4 ? { tm: 32, tn: 32, ks: 4, below: Infinity } : M <= 512 ? { tm: 32, tn: 32, ks: 2, below: Infinity } : undefined);
+        if (sk && M < sk.below && K % (8 * sk.ks) === 0 && N % sk.tn === 0) {
+          const code = `${sk.tm},${sk.tn},${sk.ks}`;
+          const kernel = this.splitKernels.get(code) ?? this.splitKernels.set(code, matmulSplitK(sk)).get(code)!;
+          return dispatch(kernel, [keep(this.uniform([M, N, K])), X, wt.tiled, Y], N / sk.tn, Math.ceil(M / sk.tm));
+        }
         const t = (globalThis as { __d1Direct?: { tm: number; tn: number; sm: number; sn: number; flush?: number } }).__d1Direct; // tuning
         const code = t ? matmulDirect(t).replace("FLUSH: u32 = 128u", `FLUSH: u32 = ${t.flush ?? 128}u`) : MATMUL_DIRECT;
         return dispatch(code, [keep(this.uniform([M, N, K])), X, wt.tiled, Y], Math.ceil(N / (t ?? DIRECT_TILE).tn), Math.ceil(M / (t ?? DIRECT_TILE).tm));

@@ -1,7 +1,7 @@
 {
   "name": "decision.js",
   "version": "0.1.0",
-  "description": "Small decision models (LiquidAI d1-omni-600M and d1-3B, Laya) in the browser on WebGPU: typed decisions over any text or JSON, no server.",
+  "description": "Small decision models (LiquidAI d1-omni-600M and d1-3B, Laya, d3-lite, EmbeddingGemma 2 typed decisions) in the browser on WebGPU: typed decisions over any text or JSON, no server.",
   "type": "module",
   "license": "Apache-2.0",
   "main": "dist/index.js",
@@ -24,6 +24,8 @@
     "classification",
     "d1",
     "decision",
+    "embeddinggemma",
+    "gemma",
     "laya",
     "lfm",
     "liquid",
@@ -37,6 +39,8 @@
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run",
     "test:browser": "tsx scripts/run-browser.ts parity",
+    "bench": "tsx scripts/run-browser.ts",
+    "fetch-model": "tsx scripts/fetch-model.ts",
     "dev": "vite",
     "bundle": "vite build -c vite.bundle.config.ts"
   },
@@ -44,6 +48,7 @@
     "@huggingface/tokenizers": "^0.2.0"
   },
   "devDependencies": {
+    "@litert-lm/core": "^0.18.0",
     "@litertjs/core": "^2.5.3",
     "@types/node": "^26.6.4",
     "@webgpu/types": "^0.1.74",

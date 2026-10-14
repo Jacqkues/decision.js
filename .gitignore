@@ -9,3 +9,5 @@ compare/litert/reference.json
 bench/decision-index/*.json
 bundle/
 __pycache__/
+compare/litert-lm/*.litertlm
+compare/litert-lm/wgsl-*/
